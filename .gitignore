@@ -2,3 +2,8 @@
 .Rhistory
 .RData
 .Ruserdata
+R_libs/
+.venv/
+DATA/
+DATA-PROCESSED/
+archive/

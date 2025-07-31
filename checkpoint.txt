@@ -1,0 +1,68 @@
+📝 To-Do List (with Status)
+Add logging after each data frame read and transformation in 004-GQ_gather.R
+✅ Completed
+Validate the data flow between functions in 004-GQ_gather.R, checking for empty or malformed data at each step
+✅ Completed (for the 2010 path up to the household pop sum)
+Correct file reading in 004-GQ_gather.R to use the correct format for P012 and PCT013 files
+✅ Completed (now using read.fwf for fixed-width files)
+Check for column name mismatches and suspicious renaming in 004-GQ_gather.R, especially after merges and transformations
+✅ Completed (LOGRECNO, TOTAL, MALE, FEMALE columns fixed; next: household pop columns)
+Summarize and propose fixes for each issue found in 004-GQ_gather.R and the data flow
+⏳ Ongoing (see below)
+🟢 Current Progress (004-GQ_gather.R)
+File reading: Now uses read.fwf for fixed-width files with correct widths and column names.
+LOGRECNO assignment: Fixed to use the correct column and standardized format (zero-padded character).
+Merging: geo, p12, and pct13 are now merged correctly, producing non-empty data frames.
+Population columns: TOTAL, MALE, and FEMALE are now correctly extracted from P012 variables.
+Aggregation: Fixed to merge all geoheader records first, then aggregate to county level.
+🟡 Current Progress (Repo-Wide)
+000–003 scripts: Only set up data in memory, do not write outputs.
+004-GQ_gather.R: First script to write outputs; now mostly fixed for 2010, but needs column range fix for household pop.
+2000 path and API: Census API calls for 2000 are failing (404); focus is on getting the 2010 path working with local files.
+🟠 CRITICAL ISSUE DISCOVERED (2024-12-19)
+Data Source Problem: The files in DATA/2010_SF1_TX/ contain North Carolina data (STATE=37), not Texas data (STATE=48).
+Validation Results:
+- All 1,018,483 records have STATE=37 (North Carolina)
+- Texas (STATE=48) is completely missing from the data
+- This explains why county aggregation produces 0 results
+File Structure Analysis:
+- Packing list shows files are correctly labeled for Texas (TX)
+- All files contain 1,018,487 rows (full national dataset)
+- P12 data is in tx000042010.sf1 (segment 4)
+- PCT13 data is in tx000182010.sf1 (segment 18)
+- Geoheader is in txgeo2010.sf1
+🛠️ Instruction Set for Resuming Work
+IMMEDIATE NEXT STEPS:
+1. Verify Data Source:
+   - Check if the files were incorrectly downloaded or mislabeled
+   - Determine if we need to download the correct Texas Census 2010 SF1 files
+   - Or if we need to filter for a different state that exists in the data
+
+2. If Using Current Data (North Carolina):
+   - Update all scripts to filter for STATE=37 instead of STATE=48
+   - Update county aggregation to work with North Carolina counties
+   - Update file paths and documentation to reflect NC data
+
+3. If Downloading Correct Texas Data:
+   - Download Texas Census 2010 SF1 files from official source
+   - Replace current files in DATA/2010_SF1_TX/
+   - Verify STATE=48 exists in new data
+
+4. Continue Script Fixes:
+   - Complete the household population column aggregation in 004-GQ_gather.R
+   - Test county-level aggregation with correct state data
+   - Optimize file reading using data.table and multithreading
+
+🛠️ Technical Notes
+- Fixed-width file reading is now working correctly with read.fwf()
+- LOGRECNO standardization prevents merge failures
+- County aggregation approach is correct (merge first, then aggregate)
+- Validation scripts moved to /debug/ folder for organization
+- data.table optimization ready for implementation
+
+🛠️ Commands for Testing
+Run validation script:
+& "C:\Program Files\R\R-4.5.1\bin\Rscript.exe" --vanilla -e ".libPaths(c('R_libs', .libPaths())); source('debug/validate_county_agg.R')"
+
+Run main script:
+& "C:\Program Files\R\R-4.5.1\bin\Rscript.exe" --vanilla -e ".libPaths(c('R_libs', .libPaths())); source('SCRIPTS/004-GQ_gather_fixed_all.R')"

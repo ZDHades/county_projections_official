@@ -1,3 +1,5 @@
+print('Starting 001-fipscodes.R...')
+library(tidyverse)
 ###------FIPSCODES-----
 ## @knitr fipscodes
 
@@ -19,3 +21,4 @@ statenames <- group_by(fipslist, STATEID, state) %>%
   dplyr::summarise()
 countynames <- group_by(fipslist, GEOID, NAME, state) %>%
   dplyr::summarise()
+print('Finished 001-fipscodes.R.')

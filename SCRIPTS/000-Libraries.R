@@ -1,3 +1,4 @@
+print('Starting 000-Libraries.R...')
 ###------LIBRARY SETUP-----
 ## @knitr libraries
 
@@ -41,22 +42,18 @@ numb_digits_F <- function(x,y){
 numb_spaces <- function(x) gsub("[[:space:]]{2,}", " ", x)
 
 
-# Install and load pacman for easier package loading and installation
-if (!require("pacman", character.only = TRUE)){
-  install.packages("pacman", dep = TRUE)
-  if (!require("pacman", character.only = TRUE))
-    stop("Package not found")
-}
+# Set user library path to local R_libs directory
+user_lib <- file.path(getwd(), "R_libs")
+if (!dir.exists(user_lib)) dir.create(user_lib)
+.libPaths(user_lib)
 
-
-# Libraries
+# List of required packages
 pkgs <- c(
   "tidyverse",     # Tidyverse
   "data.table",    # Data Management/Manipulation
   "doParallel",    # Parallel Computing
   "foreach",       # Parallel Computing
-  "openxlsx",      # Microsoft Excel Files
-  "stringi",       #Character/String Editor
+  "stringi",       # Character/String Editor
   "stringr",       # Character/String Editor
   "zoo",           # Time Series
   "reshape2",      # Data Management/Manipulation
@@ -73,26 +70,16 @@ pkgs <- c(
   "pdftools",      # Load pdfs
   "R.utils",       # Utilities
   "forecast",      # Forecasting
-  "pbmcapply",     # Progress Bar Multicore Apply
-  "parallelsugar", # Parallel apply
-  "rucm",          # UCM
-  "IDPmisc",        # Quality na.rm
   "tidycensus"     # Census Data
 )
 
 # Install missing packages
-# Will only run if at least one package is missing
-
-if(!sum(!p_isinstalled(pkgs))==0){
-  p_install(
-    package = pkgs[!p_isinstalled(pkgs)], 
-    character.only = TRUE
-  )
+for (pkg in pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg, lib = user_lib, repos = "https://cloud.r-project.org")
+  }
+  library(pkg, character.only = TRUE, lib.loc = user_lib)
 }
-
-# load the packages
-p_load(pkgs, character.only = TRUE)
-rm(pkgs)
 
 ##Parallel Computing 
 # Establish Parallel Computing Cluster
@@ -105,3 +92,4 @@ getDoParVersion() #  Version of the Currently Registered Parallel Computing Back
 
 arima_order <- c(0,1,1) # setting the global arima model
 arma <- "ARIMA(0,1,1)"
+print('Finished 000-Libraries.R.')

@@ -1,3 +1,18 @@
+print('Starting 003-proj_basedataload.R...')
+library(tidyverse)
+library(R.utils)
+
+# Ensure DATA directory exists
+if (!dir.exists('DATA')) dir.create('DATA')
+
+# Download and unzip the data file if it does not exist
+if (!file.exists('DATA/us.1990_2023.20ages.adjusted.txt')) {
+  print('Downloading CDC population estimates (1990-2023, 20 age groups)...')
+  download.file('https://seer.cancer.gov/popdata/yr1990_2023.20ages/us.1990_2023.20ages.adjusted.txt.gz', 'DATA/us.1990_2023.20ages.adjusted.txt.gz')
+  print('Unzipping CDC population estimates...')
+  R.utils::gunzip('DATA/us.1990_2023.20ages.adjusted.txt.gz', overwrite = TRUE, remove = TRUE)
+}
+
 ###------DATA LOAD-----
 ## @knitr projbasedata
 
@@ -35,7 +50,7 @@ years$YEAR <- seq(launch_year+1,launch_year+STEPS,1)
 ###################################################################
 
 # READING THE cdc DATA INTO R. THE DATA ARE IN A SINGLE COLUMN FORMAT AND SO THEY MUST BE BROKEN APART.
-K05_pop<- read.table("DATA/us.1990_2016.19ages.adjusted.txt") 
+K05_pop<- read.table("DATA/us.1990_2023.20ages.adjusted.txt") 
 K05_pop$V1 <- as.character(K05_pop$V1) # SETTING THE ENTIRE SINGLE VARIABLE INTO A CHARACTER
 K05_pop$YEAR <- as.numeric(substr(K05_pop$V1,1,4)) # SEPARATING THE YEAR AND SETTING IT AS A NUMBER
 K05_pop$STATEID <- substr(K05_pop$V1, 5,6) # SEPARATING THE 2 CHARACTER STATE ABBREVIATION
@@ -67,4 +82,6 @@ K05_launch <- K05_pop[which(K05_pop$YEAR == launch_year),] %>%
   group_by(STATE, COUNTY, GEOID, YEAR) %>%
   dplyr::summarise(POPULATION = sum(POPULATION)) %>%
   ungroup()
+
+print('Finished 003-proj_basedataload.R.')
 

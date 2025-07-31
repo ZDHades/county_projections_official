@@ -1,3 +1,5 @@
+print('Starting 007-projections_2100.R...')
+
 set.seed(100)
 
 source('./SCRIPTS/000-Libraries.R')      # loading in the libraries
@@ -402,4 +404,6 @@ foreach(i = 1:length(stateid),
           write.table(KT2, paste0("PROJECTIONS/PROJ/COUNTY_20152100_",stateid[i],".csv"))
           
         }
+
+print('Finished 007-projections_2100.R.')
 
