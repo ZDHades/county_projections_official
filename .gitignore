@@ -2,3 +2,11 @@
 .Rhistory
 .RData
 .Ruserdata
+.venv/
+archive/
+R_libs/
+/DATA
+/PROJECTIONS
+/FIGURES
+/DATA-PROCESSED
+.claude

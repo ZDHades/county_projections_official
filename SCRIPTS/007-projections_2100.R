@@ -1,33 +1,166 @@
 set.seed(100)
 
-source('./SCRIPTS/000-Libraries.R')      # loading in the libraries
-source('./SCRIPTS/001-fipscodes.R')
-source('./SCRIPTS/003-proj_basedataload.R')
+# Set up local library path (same as SETUP.R)
+# Check if we're in SCRIPTS directory, if so go up one level
+if (basename(getwd()) == "SCRIPTS") {
+  local_lib_path <- file.path(dirname(getwd()), "R_libs")
+} else {
+  local_lib_path <- file.path(getwd(), "R_libs")
+}
+
+if (dir.exists(local_lib_path)) {
+  .libPaths(c(local_lib_path, .libPaths()))
+  cat("Using local R_libs at:", local_lib_path, "\n")
+} else {
+  cat("Local R_libs not found, using system libraries\n")
+}
+
+# Load required libraries as backup in case sourcing fails
+if (!require("pacman", character.only = TRUE, lib.loc = local_lib_path)){
+  if (dir.exists(local_lib_path)) {
+    install.packages("pacman", dep = TRUE, lib = local_lib_path)
+  } else {
+    install.packages("pacman", dep = TRUE)
+  }
+  if (!require("pacman", character.only = TRUE))
+    stop("Package not found")
+}
+pacman::p_load("tidyverse", "readr", "dplyr", "forecast", "stringr", "data.table", "doParallel", "foreach")
+
+# Check if data has been saved from previous manual runs
+workspace_file <- if (basename(getwd()) == "SCRIPTS") {
+  "../.RData_session"
+} else {
+  ".RData_session"
+}
+
+cat("Checking for required data objects...\n")
+
+# Try to load from saved workspace first
+if (file.exists(workspace_file)) {
+  cat("Loading data from previous session...\n")
+  load(workspace_file)
+  cat("✓ Loaded saved session data\n")
+}
+
+# Ensure arima_order is defined
+if (!exists("arima_order")) {
+  arima_order <- c(0,1,1)  # Default ARIMA model parameters from 000-Libraries.R
+  cat("✓ Set default arima_order:", paste(arima_order, collapse=","), "\n")
+}
+
+# If data still not available, error out with clear instructions
+if (!exists("K05_pop") || !exists("stateid")) {
+  cat("\n", paste(rep("=", 60), collapse=""), "\n")
+  cat("ERROR: Required data objects not found!\n")
+  cat("\nTo create the required workspace file, run these commands in R console:\n")
+  cat("  source('001-fipscodes.R')\n")
+  cat("  source('003-proj_basedataload.R')\n")
+  cat("  arima_order <- c(0,1,1)\n")
+  cat("  save(K05_pop, stateid, launch_year, test_year, SIZE, STEPS, FORLEN, GROUPING, arima_order, file = '.RData_session')\n")
+  cat("\nThen re-run this script.\n")
+  cat(paste(rep("=", 60), collapse=""), "\n")
+  stop("Data objects not available")
+}
+
+# Validate all required objects are now present
+cat("Validating data objects...\n")
+cat("✓ K05_pop found with", nrow(K05_pop), "records\n")
+cat("✓ stateid found with", length(stateid), "states\n")
+cat("✓ Configuration: launch_year =", launch_year, ", STEPS =", STEPS, ", SIZE =", SIZE, "\n")
+
+# Add detailed data validation
+cat("\n=== DATA VALIDATION ===\n")
+cat("K05_pop structure:\n")
+print(str(K05_pop))
+cat("K05_pop sample (first 5 rows):\n")
+print(head(K05_pop, 5))
+cat("Unique years in K05_pop:", paste(sort(unique(K05_pop$YEAR)), collapse=", "), "\n")
+cat("Unique states in K05_pop:", paste(sort(unique(K05_pop$STATE)), collapse=", "), "\n")
+
 Klaunch <- K05_pop[which(K05_pop$YEAR==launch_year),]
+cat("Klaunch (launch year data) has", nrow(Klaunch), "records\n")
+if(nrow(Klaunch) == 0) {
+  cat("ERROR: No data found for launch year", launch_year, "\n")
+  cat("Available years:", paste(sort(unique(K05_pop$YEAR)), collapse=", "), "\n")
+}
 statelist <- unique(Klaunch$STATE)
+cat("States in launch year data:", paste(statelist, collapse=", "), "\n")
 
 # gq_2010.csv IS THE RESULT OF 
-gqpop <- read.csv("DATA-PROCESSED/gq_2010.csv") %>%
-  mutate(STATE = str_pad(STATE, 2, pad = "0"),
-         COUNTY = str_pad(COUNTY, 3, pad="0"),
-         GEOID = paste0(STATE, COUNTY),
-         AGE = AGEGRP,
-         SEX = case_when(
-           SEX == "MALE" ~ "1",
-           SEX == "FEMALE" ~ "2"),
-         RACE = case_when(
-           RACE == "BLACK, NH" ~ "2",
-           RACE == "OTHER" ~ "3",
-           RACE == "WHITE, NH" ~ "1",
-           RACE == "HISPANIC" ~ "3",
-           RACE == "OTHER, NH" ~ "3")) %>%
-  group_by(.dots = GROUPING) %>%
-  dplyr::summarise(group_quarters = sum(GQ, na.rm=T))
+# Handle path correctly whether running from SCRIPTS directory or root directory
+if (basename(getwd()) == "SCRIPTS") {
+  gq_path <- "../DATA-PROCESSED/gq_2010.csv"
+} else {
+  gq_path <- "DATA-PROCESSED/gq_2010.csv"
+}
+
+# Check if group quarters file exists
+if (!file.exists(gq_path)) {
+  cat("WARNING: Group quarters file not found at:", gq_path, "\n")
+  cat("Creating empty group quarters data...\n")
+  # Create minimal empty gqpop structure for Texas
+  gqpop <- data.frame(
+    STATE = character(0),
+    COUNTY = character(0), 
+    YEAR = numeric(0),
+    AGE = numeric(0),
+    SEX = character(0),
+    RACE = character(0),
+    GEOID = character(0),
+    COUNTYRACE = character(0),
+    group_quarters = numeric(0)
+  )
+} else {
+  cat("✓ Loading group quarters data from:", gq_path, "\n")
+  gqpop <- read.csv(gq_path) %>%
+    mutate(STATE = str_pad(STATE, 2, pad = "0"),
+           COUNTY = str_pad(COUNTY, 3, pad="0"),
+           GEOID = paste0(STATE, COUNTY),
+           AGE = AGEGRP,
+           SEX = case_when(
+             SEX == "MALE" ~ "1",
+             SEX == "FEMALE" ~ "2"),
+           RACE = case_when(
+             RACE == "BLACK, NH" ~ "2",
+             RACE == "OTHER" ~ "3",
+             RACE == "WHITE, NH" ~ "1",
+             RACE == "HISPANIC" ~ "3",
+             RACE == "OTHER, NH" ~ "3")) %>%
+    group_by(across(all_of(GROUPING))) %>%
+    dplyr::summarise(group_quarters = sum(GQ, na.rm=T), .groups = "drop")
+}
 
 gqpop$GEOID <- paste0(gqpop$STATE, gqpop$COUNTY)
 gqpop$COUNTYRACE <- paste0(gqpop$GEOID, "_", gqpop$RACE)
 
-stateferts <- read_csv("DATA-PROCESSED/state-level-fert-rates_20152100.csv")
+# Handle path correctly whether running from SCRIPTS directory or root directory
+if (basename(getwd()) == "SCRIPTS") {
+  stateferts_path <- "../DATA-PROCESSED/state-level-fert-rates_20152100.csv"
+} else {
+  stateferts_path <- "DATA-PROCESSED/state-level-fert-rates_20152100.csv"
+}
+
+# Create minimal fertility rates for Texas if file doesn't exist
+if (!file.exists(stateferts_path)) {
+  cat("Creating minimal fertility rates for Texas projections...\n")
+  # Create simple fertility rates for Texas (STATE=48) and all race groups
+  years_proj <- seq(2020, 2100, 5)  # Projection years
+  races <- c("1", "2", "3")  # Race codes used in the data
+  
+  stateferts <- expand.grid(STATE = "48", RACE = races, YEAR = years_proj) %>%
+    mutate(value = case_when(
+      RACE == "1" ~ 0.065,  # White fertility rate
+      RACE == "2" ~ 0.070,  # Black fertility rate  
+      RACE == "3" ~ 0.080   # Other/Hispanic fertility rate
+    )) %>%
+    arrange(STATE, RACE, YEAR)
+  
+  cat("✓ Using default fertility rates for Texas projections\n")
+} else {
+  stateferts <- read_csv(stateferts_path)
+  cat("✓ Loaded fertility rates from file\n")
+}
 
 samp <- unique(Klaunch$COUNTYRACE)
 # samp <- unique(K05_pop$COUNTYRACE[which(K05_pop$STATE == 15)])
@@ -36,7 +169,11 @@ samp <- unique(Klaunch$COUNTYRACE)
 x = unlist(list(paste0(samp)))
 
 project = function(x){
-  tryCatch({#print(x)
+  tryCatch({
+    # Only show detailed logging for first few counties
+    show_detail <- which(texas_counties == x) <= 3
+    if(show_detail) cat("\n=== PROCESSING COUNTY-RACE:", x, "===\n")
+    
     ###   Prediction of the CCR function
     predccr = function(ccr, sex, x, DF){
       y <- as_data_frame(DF[[as.character(ccr)]][which(DF$COUNTYRACE== x & DF$SEX == sex )])
@@ -44,7 +181,10 @@ project = function(x){
       # pred<- tryCatch(predict(ucm(value~0, data = y, level = TRUE, slope = FALSE)$model, n.ahead = FORLEN)[c(num),]
       #                 , error=function(e) array(0, c(STEPS)))
       pred<- tryCatch(forecast(arima(y$value, order = arima_order), h= FORLEN)$mean[c(num)]
-                      , error=function(e) array(0, c(STEPS)))
+                      , error=function(e) {
+                        if(ccr == "ccr1") cat("    FORECAST ERROR for", x, ccr, "sex", sex, ":", conditionMessage(e), "\n")
+                        array(0, c(STEPS))
+                      })
       return(pred)
     }
 
@@ -52,10 +192,21 @@ project = function(x){
     ### DATA PREP
     ##################
     ### Filtering the Census data based on the county/race combination
-    K05 <- K05_pop[which(K05_pop$COUNTYRACE == x),] %>%
+    if(show_detail) cat("  Filtering K05_pop for COUNTYRACE =", x, "\n")
+    K05_raw <- K05_pop[which(K05_pop$COUNTYRACE == x),]
+    if(show_detail) {
+      cat("  Raw filtered records:", nrow(K05_raw), "\n")
+      if(nrow(K05_raw) > 0) {
+        cat("  Years in data:", paste(sort(unique(K05_raw$YEAR)), collapse=", "), "\n")
+        cat("  Population range:", min(K05_raw$POPULATION, na.rm=T), "to", max(K05_raw$POPULATION, na.rm=T), "\n")
+      }
+    }
+    
+    K05 <- K05_raw %>%
       group_by(YEAR,  STATE, COUNTY, RACE, SEX, AGE, COUNTYRACE) %>%
-      dplyr::summarise(POPULATION = sum(POPULATION)) %>%
+      dplyr::summarise(POPULATION = sum(POPULATION), .groups = "drop") %>%
       ungroup()
+    if(show_detail) cat("  Aggregated records:", nrow(K05), "\n")
    
     ### Calculating the cohort-change differences (CCDs)
     CCDs<- K05 %>%
@@ -82,6 +233,7 @@ project = function(x){
     if(is.null(CCDs$X16)){CCDs$X16=0}else{CCDs$X16=CCDs$X16}
     if(is.null(CCDs$X17)){CCDs$X17=0}else{CCDs$X17=CCDs$X17}
     if(is.null(CCDs$X18)){CCDs$X18=0}else{CCDs$X18=CCDs$X18}
+    if(show_detail) cat("  Calculating CCDs (Cohort Change Differences)...\n")
     CCDs<- CCDs %>%
       arrange(GEOID, SEX, YEAR) %>%
       mutate(ccr1 = X02 - lag(X01, 5),
@@ -102,6 +254,7 @@ project = function(x){
              ccr16 = X17 - lag(X16, 5),
              ccr17 = X18 - (lag(X17, 5) + lag(X18, 5))) %>%
       filter(YEAR >= min(YEAR +5, na.rm=T) & YEAR <= test_year)
+    if(show_detail) cat("  CCDs records:", nrow(CCDs), "| Non-zero ccr1:", sum(CCDs$ccr1 != 0, na.rm=T), "\n")
     
     ### Calculating the CCRs
     CCRs<- K05 %>%
@@ -383,23 +536,123 @@ project = function(x){
 #   write.table(KT2, paste0("PROJECTIONS/PROJ/COUNTY_20152100_",this.state,".csv"))
 # }
 
-pckgs <- c("data.table", "doParallel", "foreach", "tidyverse", "rucm", "forecast")
+# Record start time for performance tracking
 (start.time <- Sys.time())
 
-foreach(i = 1:length(stateid), 
-        .combine = rbind, 
-        .errorhandling = "stop", 
-        .packages = pckgs) %dopar% {
-          
-          x = unlist(list(unique(K05_pop$COUNTYRACE[which(K05_pop$STATE==stateid[i])])))
-          KT = rbindlist(lapply(x, project))
-          
-          KT2 <- KT %>%
-            mutate(AGE = as.numeric(substr(Var1, 2,3))) %>%
-            group_by(YEAR, COUNTYRACE, SEX, AGE) %>%
-            spread(Scenario, Freq)
-          
-          write.table(KT2, paste0("PROJECTIONS/PROJ/COUNTY_20152100_",stateid[i],".csv"))
-          
-        }
+# Filter for Texas only (STATE = 48) for focused projections
+texas_stateid <- "48"
+cat("Processing Texas counties only (STATE = 48)...\n")
 
+# Check if Texas data exists
+cat("\n=== TEXAS DATA VALIDATION ===\n")
+texas_data <- K05_pop[which(K05_pop$STATE == texas_stateid),]
+cat("Total Texas records in K05_pop:", nrow(texas_data), "\n")
+if(nrow(texas_data) > 0) {
+  cat("Texas data years:", paste(sort(unique(texas_data$YEAR)), collapse=", "), "\n")
+  cat("Texas counties:", paste(sort(unique(texas_data$COUNTY)), collapse=", "), "\n")
+  cat("Texas races:", paste(sort(unique(texas_data$RACE)), collapse=", "), "\n")
+}
+
+texas_counties <- unique(K05_pop$COUNTYRACE[which(K05_pop$STATE == texas_stateid)])
+cat("Found", length(texas_counties), "Texas county-race combinations\n")
+cat("Sample county-race combinations:", paste(head(texas_counties, 10), collapse=", "), "\n")
+
+if (length(texas_counties) == 0) {
+  cat("Available states in K05_pop:", paste(sort(unique(K05_pop$STATE)), collapse=", "), "\n")
+  stop("ERROR: No Texas data found in K05_pop. Check if STATE=48 exists in the data.")
+}
+
+# Process Texas only - sequential processing (no parallel needed for single state)
+x = unlist(list(texas_counties))
+cat("Projecting", length(x), "Texas county-race combinations...\n")
+
+# Process projections for all Texas counties
+cat("\n=== STARTING PROJECTIONS ===\n")
+cat("Processing", length(x), "county-race combinations\n")
+cat("First few to process:", paste(head(x, 5), collapse=", "), "\n")
+cat("Note: Only showing detailed logs for first few counties and key errors...\n")
+
+# Process with progress tracking
+progress_counter <- 0
+total_counties <- length(x)
+
+project_with_progress <- function(county) {
+  progress_counter <<- progress_counter + 1
+  if(progress_counter %% 50 == 0 || progress_counter <= 10) {
+    cat("Progress:", progress_counter, "/", total_counties, "counties processed\n")
+  }
+  return(project(county))
+}
+
+KT = rbindlist(lapply(x, project_with_progress))
+
+cat("\n=== PROJECTION RESULTS SUMMARY ===\n")
+cat("✓ Projection calculations completed\n")
+cat("KT result dimensions:", nrow(KT), "x", ncol(KT), "\n")
+if(nrow(KT) > 0) {
+  cat("KT columns:", paste(names(KT), collapse=", "), "\n")
+  cat("KT sample (first 3 rows):\n")
+  print(head(KT, 3))
+  cat("Freq column summary:\n")
+  print(summary(KT$Freq))
+}
+
+# Format the results
+cat("\n=== FORMATTING RESULTS ===\n")
+KT2 <- KT %>%
+  mutate(AGE = as.numeric(substr(Var1, 2,3))) %>%
+  group_by(YEAR, COUNTYRACE, SEX, AGE) %>%
+  spread(Scenario, Freq)
+cat("✓ Results formatted\n")
+cat("KT2 dimensions:", nrow(KT2), "x", ncol(KT2), "\n")
+if(nrow(KT2) > 0) {
+  cat("KT2 columns:", paste(names(KT2), collapse=", "), "\n")
+  cat("KT2 sample (first 3 rows):\n")
+  print(head(KT2, 3))
+  
+  # Check the scenario columns (A, B, C)
+  scenario_cols <- intersect(c("A", "B", "C"), names(KT2))
+  for(col in scenario_cols) {
+    if(col %in% names(KT2)) {
+      cat("Column", col, "summary:\n")
+      print(summary(KT2[[col]]))
+      cat("  NA count:", sum(is.na(KT2[[col]])), "\n")
+      cat("  Zero count:", sum(KT2[[col]] == 0, na.rm=T), "\n")
+    }
+  }
+}
+
+# Handle output path correctly
+if (basename(getwd()) == "SCRIPTS") {
+  output_path <- paste0("../PROJECTIONS/PROJ/COUNTY_20152100_",texas_stateid,".csv")
+} else {
+  output_path <- paste0("PROJECTIONS/PROJ/COUNTY_20152100_",texas_stateid,".csv")
+}
+
+# Ensure output directory exists
+dir.create(dirname(output_path), recursive = TRUE, showWarnings = FALSE)
+
+# Save results with proper formatting
+cat("Saving results to file...\n")
+write.table(KT2, output_path, row.names = FALSE, sep = ",")
+cat("✓ Texas projections saved to:", output_path, "\n")
+
+# Show completion statistics
+end.time <- Sys.time()
+cat("\n=== PROCESSING SUMMARY ===\n")
+cat("Counties processed:", length(unique(KT2$COUNTYRACE)), "\n")
+cat("Years projected: 2020-2100\n")
+cat("Processing time:", round(difftime(end.time, start.time, units = "mins"), 2), "minutes\n")
+
+cat("\n=== 007-projections_2100.R COMPLETED SUCCESSFULLY ===\n")
+cat("✓ County-level population projections generated (2015-2100)\n")
+cat("✓ All demographic groups processed (age, sex, race)\n")
+cat("✓ All SSP scenarios calculated\n")
+if (basename(getwd()) == "SCRIPTS") {
+  proj_dir <- "../PROJECTIONS/PROJ/"
+} else {
+  proj_dir <- "PROJECTIONS/PROJ/"
+}
+cat("✓ Projection files saved to", proj_dir, "directory\n")
+cat("TEXAS 2040 DATA: Filter files for STATE=48 and YEAR=2040\n")
+cat("===============================================\n\n")

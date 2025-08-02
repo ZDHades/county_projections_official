@@ -1,11 +1,34 @@
 rm(list=ls())
-library(tidyverse)
-library(tigris)
-library(censusapi)
-library(tidycensus)
+
+# Set up local library path (same as SETUP.R)
+# Check if we're in SCRIPTS directory, if so go up one level
+if (basename(getwd()) == "SCRIPTS") {
+  local_lib_path <- file.path(dirname(getwd()), "R_libs")
+} else {
+  local_lib_path <- file.path(getwd(), "R_libs")
+}
+
+if (dir.exists(local_lib_path)) {
+  .libPaths(c(local_lib_path, .libPaths()))
+  cat("Using local R_libs at:", local_lib_path, "\n")
+} else {
+  cat("Local R_libs not found, using system libraries\n")
+}
+
+# Load required libraries
+if (!require("pacman", character.only = TRUE, lib.loc = local_lib_path)){
+  if (dir.exists(local_lib_path)) {
+    install.packages("pacman", dep = TRUE, lib = local_lib_path)
+  } else {
+    install.packages("pacman", dep = TRUE)
+  }
+  if (!require("pacman", character.only = TRUE))
+    stop("Package not found")
+}
+pacman::p_load("tidyverse", "readr", "dplyr", "tigris", "censusapi", "tidycensus", "pbmcapply", "data.table", "parallel")
 
 # ENTER YOUR CENSUS API KEY HERE
- key <- "0206e3f2924a424be8722887fd0a49cea6308a7e"
+key <- "6ec2eb88962af79b6b696d68372b8ce319f9fd6c"
 
 
 fipslist <- read_csv(file="https://www2.census.gov/geo/docs/reference/codes/files/national_county.txt", col_names = FALSE) %>%
@@ -20,7 +43,7 @@ stateid = unlist(list(unique(fipslist$STATEID)))
 getgq_2010 = function(x){
   tryCatch({
     # listing the available census variables in the population estimates agegroups data file
-    # list <- listCensusMetadata(name = "sf1", vintage = "2010", type ="variables")
+    # list <- listCensusMetadata(name = "dec/sf1", vintage = "2010", type ="variables")
     occupied_hhpopvars <- c('PCT013B006', 'PCT013B007', 'PCT013B008', 'PCT013B009', 'PCT013B010', 'PCT013B011', 'PCT013B012', 'PCT013B013', 'PCT013B014',
                             'PCT013B015', 'PCT013B016', 'PCT013B017', 'PCT013B018', 'PCT013B019', 'PCT013B020', 'PCT013B021', 'PCT013B022', 'PCT013B023',
                             'PCT013B024', 'PCT013B025', 'PCT013C003', 'PCT013C004', 'PCT013C005', 'PCT013C006', 'PCT013C007',
@@ -125,73 +148,112 @@ getgq_2010 = function(x){
     
     
     # Getting the census data from the API
-    totpop <- getCensus(name="sf1", # This is the Estimates datafile
+    totpop <- getCensus(name="dec/sf1", # This is the Estimates datafile
                         vintage = "2010", # Vintage year is set to the variable set above
                         key = key, # inputting my Census API key
                         vars = totpopvars, # gathering these variables
                         region="COUNTY:*",
                         regionin=paste0("state:", x))  %>%
       gather(name, TOTAL, P012B003:P012I049) %>%
-      left_join(., list) %>%
-      mutate(Racecode = substr(name, 5, 5)) %>%
-      separate(label, c("Sex", "Other"), sep = ":") %>%
-      separate(Other, c("drop", "pAge"), sep = "! ") %>%
-      separate(pAge, c("Age", "Drop"), sep = " t") %>%
-      mutate(Age = case_when(
-        Age == "Under 5 years" ~ "0",
-        Age == "18 and 19 years" ~ "15",
-        Age == "20 years" ~ "20",
-        Age == "21 years" ~ "20",
-        Age == "22" ~ "20",
-        Age == "60 and 61 years" ~ "60",
-        Age == "62" ~ "60",
-        Age == "65 and 66 years" ~ "65",
-        Age == "67" ~ "65",
-        Age == "85 years and over" ~ "85",
-        TRUE ~ as.character(Age)),
-        Race = case_when(
-          Racecode == "B" ~ "BLACK, NH",
-          Racecode %in% c("C", "D", "E", "F", "G") ~ "OTHER, NH",
-          Racecode == "H" ~ "HISPANIC",
-          Racecode == "I" ~ "WHITE, NH"
-        ))  %>%
-      dplyr::select(-drop, -Drop, -concept, -Racecode, -name)  %>%
+      # Extract info directly from variable names without metadata
+      mutate(Racecode = substr(name, 5, 5),
+             # Extract age group from variable code suffix
+             age_suffix = as.numeric(substr(name, 6, 8)),
+             # Map age suffix to age groups
+             Age = case_when(
+               age_suffix %in% c(3, 27) ~ 1,    # Under 5 years
+               age_suffix %in% c(4, 28) ~ 2,    # 5 to 9 years
+               age_suffix %in% c(5, 29) ~ 3,    # 10 to 14 years
+               age_suffix %in% c(6, 30) ~ 4,    # 15 to 17 years
+               age_suffix %in% c(7, 31) ~ 4,    # 18 and 19 years
+               age_suffix %in% c(8, 32) ~ 5,    # 20 years
+               age_suffix %in% c(9, 33) ~ 5,    # 21 years
+               age_suffix %in% c(10, 34) ~ 5,   # 22 to 24 years
+               age_suffix %in% c(11, 35) ~ 6,   # 25 to 29 years
+               age_suffix %in% c(12, 36) ~ 7,   # 30 to 34 years
+               age_suffix %in% c(13, 37) ~ 8,   # 35 to 39 years
+               age_suffix %in% c(14, 38) ~ 9,   # 40 to 44 years
+               age_suffix %in% c(15, 39) ~ 10,  # 45 to 49 years
+               age_suffix %in% c(16, 40) ~ 11,  # 50 to 54 years
+               age_suffix %in% c(17, 41) ~ 12,  # 55 to 59 years
+               age_suffix %in% c(18, 42) ~ 13,  # 60 and 61 years
+               age_suffix %in% c(19, 43) ~ 13,  # 62 to 64 years
+               age_suffix %in% c(20, 44) ~ 14,  # 65 and 66 years
+               age_suffix %in% c(21, 45) ~ 14,  # 67 to 69 years
+               age_suffix %in% c(22, 46) ~ 15,  # 70 to 74 years
+               age_suffix %in% c(23, 47) ~ 16,  # 75 to 79 years
+               age_suffix %in% c(24, 48) ~ 17,  # 80 to 84 years
+               age_suffix %in% c(25, 49) ~ 18,  # 85 years and over
+               TRUE ~ NA_real_
+             ),
+             # Map sex from age suffix (Male = 003-025, Female = 027-049)
+             Sex = case_when(
+               age_suffix >= 3 & age_suffix <= 25 ~ "Male",
+               age_suffix >= 27 & age_suffix <= 49 ~ "Female",
+               TRUE ~ NA_character_
+             ),
+             Race = case_when(
+               Racecode == "B" ~ "BLACK, NH",
+               Racecode %in% c("C", "D", "E", "F", "G") ~ "OTHER, NH",
+               Racecode == "H" ~ "HISPANIC",
+               Racecode == "I" ~ "WHITE, NH"
+             )) %>%
+      filter(!is.na(Age) & !is.na(Sex)) %>%
+      dplyr::select(-age_suffix, -Racecode, -name)  %>%
       group_by(state, county, NAME, Sex, Race, Age) %>%
-      dplyr::summarise(TOTAL = sum(TOTAL))
+      dplyr::summarise(TOTAL = sum(TOTAL), .groups = "drop")
     
-    hhpopp <- getCensus(name="sf1", # This is the Estimates datafile
+    hhpopp <- getCensus(name="dec/sf1", # This is the Estimates datafile
                         vintage = "2010", # Vintage year is set to the variable set above
                         key = key, # inputting my Census API key
                         vars = occupied_hhpopvars, # gathering these variables
                         region="COUNTY:*",
                         regionin=paste0("state:", x)) %>%
-      gather(name, HHPOP, PCT013B006:PCT013B049) %>%
-      left_join(., list) %>%
-      mutate(Racecode = substr(name, 7, 7)) %>%
-      separate(label, c("Sex", "Other"), sep = ":") %>%
-      separate(Other, c("drop", "pAge"), sep = "! ") %>%
-      separate(pAge, c("Age", "Drop"), sep = " t") %>%
-      mutate(Age = case_when(
-        Age == "Under 5 years" ~ "0",
-        Age == "18 and 19 years" ~ "15",
-        Age == "20 years" ~ "20",
-        Age == "21 years" ~ "20",
-        Age == "22" ~ "20",
-        Age == "60 and 61 years" ~ "60",
-        Age == "62" ~ "60",
-        Age == "65 and 66 years" ~ "65",
-        Age == "67" ~ "65",
-        Age == "85 years and over" ~ "85",
-        TRUE ~ as.character(Age)),
-        Race = case_when(
-          Racecode == "B" ~ "BLACK, NH",
-          Racecode %in% c("C", "D", "E", "F", "G") ~ "OTHER, NH",
-          Racecode == "H" ~ "HISPANIC",
-          Racecode == "I" ~ "WHITE, NH"
-        ))  %>%
-      dplyr::select(-drop, -Drop, -concept, -Racecode, -name) %>%
+      gather(name, HHPOP, PCT013B006:PCT013I049) %>%
+      # Extract info directly from variable names without metadata
+      mutate(Racecode = substr(name, 7, 7),
+             # Extract age group from variable code suffix
+             age_suffix = as.numeric(substr(name, 8, 10)),
+             # Map age suffix to age groups
+             Age = case_when(
+               age_suffix %in% c(6, 30) ~ 1,    # Under 5 years
+               age_suffix %in% c(7, 31) ~ 2,    # 5 to 9 years
+               age_suffix %in% c(8, 32) ~ 3,    # 10 to 14 years
+               age_suffix %in% c(9, 33) ~ 4,    # 15 to 17 years
+               age_suffix %in% c(10, 34) ~ 4,   # 18 and 19 years
+               age_suffix %in% c(11, 35) ~ 5,   # 20 years
+               age_suffix %in% c(12, 36) ~ 5,   # 21 years
+               age_suffix %in% c(13, 37) ~ 5,   # 22 to 24 years
+               age_suffix %in% c(14, 38) ~ 6,   # 25 to 29 years
+               age_suffix %in% c(15, 39) ~ 7,   # 30 to 34 years
+               age_suffix %in% c(16, 40) ~ 8,   # 35 to 39 years
+               age_suffix %in% c(17, 41) ~ 9,   # 40 to 44 years
+               age_suffix %in% c(18, 42) ~ 10,  # 45 to 49 years
+               age_suffix %in% c(19, 43) ~ 11,  # 50 to 54 years
+               age_suffix %in% c(20, 44) ~ 12,  # 55 to 59 years
+               age_suffix %in% c(21, 45) ~ 13,  # 60 and 61 years
+               age_suffix %in% c(22, 46) ~ 13,  # 62 to 64 years
+               age_suffix %in% c(23, 47) ~ 14,  # 65 and 66 years
+               age_suffix %in% c(24, 48) ~ 14,  # 67 to 69 years
+               age_suffix %in% c(25, 49) ~ 15,  # 70 to 74 years
+               TRUE ~ NA_real_
+             ),
+             # Map sex from age suffix (Male = 006-025/030-049, Female = 027-049 only for some)
+             Sex = case_when(
+               age_suffix >= 6 & age_suffix <= 25 ~ "Male",
+               age_suffix >= 30 & age_suffix <= 49 ~ "Female",
+               TRUE ~ NA_character_
+             ),
+             Race = case_when(
+               Racecode == "B" ~ "BLACK, NH",
+               Racecode %in% c("C", "D", "E", "F", "G") ~ "OTHER, NH",
+               Racecode == "H" ~ "HISPANIC",
+               Racecode == "I" ~ "WHITE, NH"
+             )) %>%
+      filter(!is.na(Age) & !is.na(Sex)) %>%
+      dplyr::select(-age_suffix, -Racecode, -name) %>%
       group_by(state, county, NAME, Sex, Race, Age) %>%
-      dplyr::summarise(HHPOP = sum(HHPOP))
+      dplyr::summarise(HHPOP = sum(HHPOP), .groups = "drop")
     
     joined <- left_join(totpop, hhpopp) %>%
       ungroup() %>%
@@ -238,7 +300,7 @@ getgq_2000 = function(x){
   tryCatch({
     
     # listing the available census variables in the population estimates agegroups data file
-    # list <- listCensusMetadata(name = "sf1", vintage = baseyear, type ="variables")
+    # list <- listCensusMetadata(name = "dec/sf1", vintage = baseyear, type ="variables")
     occupied_hhpopvars <- c('PCT013B006', 'PCT013B007', 'PCT013B008', 'PCT013B009', 'PCT013B010', 'PCT013B011', 'PCT013B012', 'PCT013B013', 'PCT013B014',
                             'PCT013B015', 'PCT013B016', 'PCT013B017', 'PCT013B018', 'PCT013B019', 'PCT013B020', 'PCT013B021', 'PCT013B022', 'PCT013B023',
                             'PCT013B024', 'PCT013B025', 'PCT013C003', 'PCT013C004', 'PCT013C005', 'PCT013C006', 'PCT013C007',
@@ -343,113 +405,112 @@ getgq_2000 = function(x){
     
     
     # Getting the census data from the API
-    totpop <- getCensus(name="sf1", # This is the Estimates datafile
+    totpop <- getCensus(name="dec/sf1", # This is the Estimates datafile
                         vintage = "2000", # Vintage year is set to the variable set above
                         key = key, # inputting my Census API key
                         vars = totpopvars, # gathering these variables
                         region="COUNTY:*",
                         regionin=paste0("state:", x))  %>%
       gather(name, TOTAL, P012B003:P012I049) %>%
-      left_join(., list) %>%
+      # Extract info directly from variable names without metadata
       mutate(Racecode = substr(name, 5, 5),
-             label= as.character(label)) %>%
-      separate(label, c("Drop", "Sex", "Age"), sep = ":") %>%
-      # separate(Other, c("drop", "pAge"), sep = "! ") %>%
-      # separate(pAge, c("Age", "Drop"), sep = " years") %>%
-      mutate(Age = case_when(
-        Age == "'<'5" ~ 1,
-        Age == "5 to 9" ~ 2,
-        Age == "10 to 14" ~ 3,
-        Age == "15 to 17" ~ 4,
-        Age == "18'&'19" ~ 4,
-        Age == "20" ~ 5,
-        Age == "21" ~ 5,
-        Age == "22 to 24" ~ 5,
-        Age == "25 to 29" ~ 6,
-        Age == "30 to 34" ~ 7,
-        Age == "35 to 39" ~ 8,
-        Age == "40 to 44" ~ 9,
-        Age == "45 to 49" ~ 10,
-        Age == "50 to 54" ~ 11,
-        Age == "55 to 59" ~ 12,
-        Age == "60'&'61" ~ 13,
-        Age == "62 to 64" ~ 13,
-        Age == "65'&'66" ~ 14,
-        Age == "67 to 69" ~ 14,
-        Age == "70 to 74" ~ 15,
-        Age == "" ~ 15,
-        Age == "75 to 79" ~ 16,
-        Age == "80 to 84" ~ 17,
-        Age == "85 yrs'&'over" ~ 18,
-        Age == " 85 yrs'&'over" ~ 18),
-        Race = case_when(
-          Racecode == "B" ~ "BLACK, NH",
-          Racecode %in% c("C", "D", "E", "F", "G") ~ "OTHER, NH",
-          Racecode == "H" ~ "HISPANIC",
-          Racecode == "I" ~ "WHITE, NH"
-        ),
-        SEX = case_when(
-          Sex == "Male" ~ "MALE",
-          Sex == "Female" ~ "FEMALE",
-          Sex == "Femalee" ~ "FEMALE"
-        ))  %>%
-      dplyr::select(-concept, -Racecode, -name)  %>%
+             # Extract age group from variable code suffix
+             age_suffix = as.numeric(substr(name, 6, 8)),
+             # Map age suffix to age groups
+             Age = case_when(
+               age_suffix %in% c(3, 27) ~ 1,    # Under 5 years
+               age_suffix %in% c(4, 28) ~ 2,    # 5 to 9 years
+               age_suffix %in% c(5, 29) ~ 3,    # 10 to 14 years
+               age_suffix %in% c(6, 30) ~ 4,    # 15 to 17 years
+               age_suffix %in% c(7, 31) ~ 4,    # 18 and 19 years
+               age_suffix %in% c(8, 32) ~ 5,    # 20 years
+               age_suffix %in% c(9, 33) ~ 5,    # 21 years
+               age_suffix %in% c(10, 34) ~ 5,   # 22 to 24 years
+               age_suffix %in% c(11, 35) ~ 6,   # 25 to 29 years
+               age_suffix %in% c(12, 36) ~ 7,   # 30 to 34 years
+               age_suffix %in% c(13, 37) ~ 8,   # 35 to 39 years
+               age_suffix %in% c(14, 38) ~ 9,   # 40 to 44 years
+               age_suffix %in% c(15, 39) ~ 10,  # 45 to 49 years
+               age_suffix %in% c(16, 40) ~ 11,  # 50 to 54 years
+               age_suffix %in% c(17, 41) ~ 12,  # 55 to 59 years
+               age_suffix %in% c(18, 42) ~ 13,  # 60 and 61 years
+               age_suffix %in% c(19, 43) ~ 13,  # 62 to 64 years
+               age_suffix %in% c(20, 44) ~ 14,  # 65 and 66 years
+               age_suffix %in% c(21, 45) ~ 14,  # 67 to 69 years
+               age_suffix %in% c(22, 46) ~ 15,  # 70 to 74 years
+               age_suffix %in% c(23, 47) ~ 16,  # 75 to 79 years
+               age_suffix %in% c(24, 48) ~ 17,  # 80 to 84 years
+               age_suffix %in% c(25, 49) ~ 18,  # 85 years and over
+               TRUE ~ NA_real_
+             ),
+             Race = case_when(
+               Racecode == "B" ~ "BLACK, NH",
+               Racecode %in% c("C", "D", "E", "F", "G") ~ "OTHER, NH",
+               Racecode == "H" ~ "HISPANIC",
+               Racecode == "I" ~ "WHITE, NH"
+             ),
+             SEX = case_when(
+               age_suffix >= 3 & age_suffix <= 25 ~ "MALE",
+               age_suffix >= 27 & age_suffix <= 49 ~ "FEMALE",
+               TRUE ~ NA_character_
+             )) %>%
+      filter(!is.na(Age) & !is.na(SEX)) %>%
+      dplyr::select(-age_suffix, -Racecode, -name)  %>%
       group_by(state, county, NAME, SEX, Race, Age) %>%
-      dplyr::summarise(TOTAL = sum(TOTAL))
+      dplyr::summarise(TOTAL = sum(TOTAL), .groups = "drop")
     
     # totpop[is.na(totpop)] <-18
     
-    hhpopp <- getCensus(name="sf1", # This is the Estimates datafile
+    hhpopp <- getCensus(name="dec/sf1", # This is the Estimates datafile
                         vintage = paste0(baseyear), # Vintage year is set to the variable set above
                         key = key, # inputting my Census API key
                         vars = occupied_hhpopvars, # gathering these variables
                         region="COUNTY:*",
                         regionin=paste0("state:", x)) %>%
-      gather(name, HHPOP, PCT013B006:PCT013B049) %>%
-      left_join(., list) %>%
-      mutate(Racecode = substr(name, 7, 7)) %>%
-      separate(label, c("Other", "Sex", "Age"), sep = ":") %>%
-      # separate(Other, c("drop", "pAge"), sep = "! ") %>%
-      # separate(pAge, c("Age", "Drop"), sep = " years") %>%
-      mutate(Age = case_when(
-        Age == "Under 5 years" ~ 1,
-        Age == "5 to 9 years" ~ 2,
-        Age == "10 to 14 years" ~ 3,
-        Age == "15 to 17 years" ~ 4,
-        Age == "18 and 19 years" ~ 4,
-        Age == "20 years" ~ 5,
-        Age == "21 years" ~ 5,
-        Age == "22 to 24 years" ~ 5,
-        Age == "25 to 29 years" ~ 6,
-        Age == "30 to 34 years" ~ 7,
-        Age == "35 to 39 years" ~ 8,
-        Age == "40 to 44 years" ~ 9,
-        Age == "45 to 49 years" ~ 10,
-        Age == "50 to 54 years" ~ 11,
-        Age == "55 to 59 years" ~ 12,
-        Age == "60 and 61 years" ~ 13,
-        Age == "62 to 64 years" ~ 13,
-        Age == "65 and 66 years" ~ 14,
-        Age == "67 to 69 years" ~ 14,
-        Age == "70 to 74 years" ~ 15,
-        Age == "" ~ 15,
-        Age == "75 to 79 years" ~ 16,
-        Age == "80 to 84 years" ~ 17,
-        Age == "85 years and over" ~ 18),
-        Race = case_when(
-          Racecode == "B" ~ "BLACK, NH",
-          Racecode %in% c("C", "D", "E", "F", "G") ~ "OTHER, NH",
-          Racecode == "H" ~ "HISPANIC",
-          Racecode == "I" ~ "WHITE, NH"
-        ),
-        SEX = case_when(
-          Sex == "Male" ~ "MALE",
-          Sex == "Female" ~ "FEMALE",
-          Sex == "Femalee" ~ "FEMALE"
-        ))  %>%
-      dplyr::select(-concept, -Racecode, -name) %>%
+      gather(name, HHPOP, PCT013B006:PCT013I049) %>%
+      # Extract info directly from variable names without metadata
+      mutate(Racecode = substr(name, 7, 7),
+             # Extract age group from variable code suffix
+             age_suffix = as.numeric(substr(name, 8, 10)),
+             # Map age suffix to age groups
+             Age = case_when(
+               age_suffix %in% c(6, 30) ~ 1,    # Under 5 years
+               age_suffix %in% c(7, 31) ~ 2,    # 5 to 9 years
+               age_suffix %in% c(8, 32) ~ 3,    # 10 to 14 years
+               age_suffix %in% c(9, 33) ~ 4,    # 15 to 17 years
+               age_suffix %in% c(10, 34) ~ 4,   # 18 and 19 years
+               age_suffix %in% c(11, 35) ~ 5,   # 20 years
+               age_suffix %in% c(12, 36) ~ 5,   # 21 years
+               age_suffix %in% c(13, 37) ~ 5,   # 22 to 24 years
+               age_suffix %in% c(14, 38) ~ 6,   # 25 to 29 years
+               age_suffix %in% c(15, 39) ~ 7,   # 30 to 34 years
+               age_suffix %in% c(16, 40) ~ 8,   # 35 to 39 years
+               age_suffix %in% c(17, 41) ~ 9,   # 40 to 44 years
+               age_suffix %in% c(18, 42) ~ 10,  # 45 to 49 years
+               age_suffix %in% c(19, 43) ~ 11,  # 50 to 54 years
+               age_suffix %in% c(20, 44) ~ 12,  # 55 to 59 years
+               age_suffix %in% c(21, 45) ~ 13,  # 60 and 61 years
+               age_suffix %in% c(22, 46) ~ 13,  # 62 to 64 years
+               age_suffix %in% c(23, 47) ~ 14,  # 65 and 66 years
+               age_suffix %in% c(24, 48) ~ 14,  # 67 to 69 years
+               age_suffix %in% c(25, 49) ~ 15,  # 70 to 74 years
+               TRUE ~ NA_real_
+             ),
+             Race = case_when(
+               Racecode == "B" ~ "BLACK, NH",
+               Racecode %in% c("C", "D", "E", "F", "G") ~ "OTHER, NH",
+               Racecode == "H" ~ "HISPANIC",
+               Racecode == "I" ~ "WHITE, NH"
+             ),
+             SEX = case_when(
+               age_suffix >= 6 & age_suffix <= 25 ~ "MALE",
+               age_suffix >= 30 & age_suffix <= 49 ~ "FEMALE",
+               TRUE ~ NA_character_
+             )) %>%
+      filter(!is.na(Age) & !is.na(SEX)) %>%
+      dplyr::select(-age_suffix, -Racecode, -name) %>%
       group_by(state, county, NAME, SEX, Race, Age) %>%
-      dplyr::summarise(HHPOP = sum(HHPOP))
+      dplyr::summarise(HHPOP = sum(HHPOP), .groups = "drop")
     
     joined <- left_join(totpop, hhpopp) %>%
       ungroup() %>%
@@ -470,17 +531,88 @@ getgq_2000 = function(x){
   , error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
 }
 
-list <- listCensusMetadata(name = "sf1", vintage = "2010", type ="variables")
-dat <- pbmclapply(stateid, getgq_2010)
-GQ2010 <- rbindlist(dat)
+# Process group quarters data - using sequential processing to ensure data quality
+cat("Processing 2010 group quarters data...\n")
+cat("Using sequential processing with progress tracking...\n")
+
+# Sequential processing with detailed progress tracking
+GQ2010_list <- list()
+for (i in seq_along(stateid)) {
+  state <- stateid[i]
+  cat("Processing state", state, "(", i, "of", length(stateid), ")...\n")
+  
+  tryCatch({
+    result <- getgq_2010(state)
+    if (!is.null(result) && nrow(result) > 0) {
+      GQ2010_list[[i]] <- result
+      cat("  ✓ State", state, ":", nrow(result), "records\n")
+    } else {
+      cat("  ⚠ State", state, ": No data returned\n")
+    }
+  }, error = function(e) {
+    cat("  ✗ State", state, "ERROR:", e$message, "\n")
+  })
+}
+
+# Combine results
+if (length(GQ2010_list) > 0) {
+  GQ2010 <- rbindlist(GQ2010_list, fill = TRUE)
+  cat("✓ 2010 group quarters data: Total", nrow(GQ2010), "records from", length(GQ2010_list), "states\n")
+} else {
+  stop("No 2010 group quarters data was successfully processed")
+}
 
 baseyear <- "2000"
 
+cat("Processing 2000 group quarters data...\n") 
+cat("Using sequential processing with progress tracking...\n")
 
-list <- listCensusMetadata(name = "sf1", vintage = baseyear, type ="variables")
-dat <- pbmclapply(stateid, getgq_2000)
-GQ2000 <- rbindlist(dat)
+# Sequential processing with detailed progress tracking
+GQ2000_list <- list()
+for (i in seq_along(stateid)) {
+  state <- stateid[i]
+  cat("Processing state", state, "(", i, "of", length(stateid), ")...\n")
+  
+  tryCatch({
+    result <- getgq_2000(state)
+    if (!is.null(result) && nrow(result) > 0) {
+      GQ2000_list[[i]] <- result
+      cat("  ✓ State", state, ":", nrow(result), "records\n")
+    } else {
+      cat("  ⚠ State", state, ": No data returned\n")
+    }
+  }, error = function(e) {
+    cat("  ✗ State", state, "ERROR:", e$message, "\n")
+  })
+}
 
-write_csv(GQ2010, "DATA-PROCESSED/gq_2010.csv")
-write_csv(GQ2000, "DATA-PROCESSED/gq_2000.csv")
+# Combine results
+if (length(GQ2000_list) > 0) {
+  GQ2000 <- rbindlist(GQ2000_list, fill = TRUE)
+  cat("✓ 2000 group quarters data: Total", nrow(GQ2000), "records from", length(GQ2000_list), "states\n")
+} else {
+  stop("No 2000 group quarters data was successfully processed")
+}
+
+# Handle path correctly whether running from SCRIPTS directory or root directory
+if (basename(getwd()) == "SCRIPTS") {
+  output_path_2010 <- "../DATA-PROCESSED/gq_2010.csv"
+  output_path_2000 <- "../DATA-PROCESSED/gq_2000.csv"
+  output_dir <- "../DATA-PROCESSED/"
+} else {
+  output_path_2010 <- "DATA-PROCESSED/gq_2010.csv"
+  output_path_2000 <- "DATA-PROCESSED/gq_2000.csv"
+  output_dir <- "DATA-PROCESSED/"
+}
+
+write_csv(GQ2010, output_path_2010)
+write_csv(GQ2000, output_path_2000)
+
+cat("\n=== 004-GQ_gather.R COMPLETED SUCCESSFULLY ===\n")
+cat("✓ Group quarters data gathered from Census API\n")
+cat(paste("✓", nrow(GQ2010), "records for 2010 group quarters\n"))
+cat(paste("✓", nrow(GQ2000), "records for 2000 group quarters\n"))
+cat("✓ Group quarters data saved to", output_dir, "\n")
+cat("Ready to proceed to 007-projections_2100.R\n")
+cat("===============================================\n\n")
 

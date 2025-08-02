@@ -1,0 +1,41 @@
+# TEXAS COUNTY PROJECTIONS 2040 - EXECUTION GUIDE
+# ===============================================
+
+This repository can generate detailed population projections for all 254 Texas counties for 2040.
+
+PROJECTION DETAILS:
+• Target Year: 2040
+• Geographic Scope: All 254 Texas counties (FIPS State Code 48)
+• Demographics: Age (18 groups), Sex (2 groups), Race (4 groups)
+• SSP Scenarios: 5 different migration scenarios
+
+EXECUTION STEPS FOR TEXAS 2040 PROJECTIONS:
+
+1. SETUP (this script handles most requirements):
+   ✓ Census API key configured
+   ✓ Required R packages installed
+   ✓ Data files downloaded and extracted
+   NOTE: If automatic extraction fails, manually double-click the .exe files in DATA/
+
+2. RUN PROJECTION SCRIPTS IN ORDER:
+   - 000-Libraries.R (load required packages)
+   - 001-fipscodes.R (load county identifiers)
+   - 002-basedataload.R (load historical validation data)
+   - 003-proj_basedataload.R (load projection base data)
+   - 004-GQ_gather.R (gather group quarters data)
+   - 007-projections_2100.R (main projection engine)
+
+3. OUTPUT LOCATION:
+   - Results will be in PROJECTIONS/ directory
+   - Look for county-level files with 2040 data
+   - Texas counties will have GEOID starting with '48'
+
+4. DATA STRUCTURE:
+   YEAR | STATE | COUNTY | GEOID | AGE | SEX | RACE | SSP | POPULATION
+   2040 |   48  |  XXX   | 48XXX |  X  |  X  |  X   |  X  |    XXXX
+
+5. FILTERING FOR TEXAS 2040:
+   - Filter where YEAR == 2040 AND STATE == 48
+   - All 254 Texas counties will be included
+
+NOTE: The projection process may take several hours for all counties.

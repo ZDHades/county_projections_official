@@ -2,9 +2,9 @@
 ### DATA PREP
 ##################
 rm(list=ls())
-source('./SCRIPTS/000-Libraries.R')      # loading in the libraries
-source('./SCRIPTS/002-basedataload.R')   # loading the base data
-source('./SCRIPTS/001-fipscodes.R')      # Getting a Fips List
+source('000-Libraries.R')      # loading in the libraries
+source('002-basedataload.R')   # loading the base data
+source('001-fipscodes.R')      # Getting a Fips List
 
 K05_pop <- K05_pop %>%
   group_by(.dots = GROUPING) %>% # grouping by the GROUPING variable in script `002-basedataload.R`
